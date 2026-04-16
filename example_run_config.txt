@@ -1,0 +1,19 @@
+# Minimal config using defaults for non-detection settings.
+# In single mode (default), output_path defaults to:
+# <input_image_name>_interactive_viewer.html in the same folder.
+
+mode = batch
+input_path = data/Ecad
+output_path = output/batch_results
+detection_preset = balanced
+
+# Optional overrides:
+# mode = single
+# output_path = output/my_custom_viewer.html
+# detection_preset = balanced   # options: sensitive, balanced (ZO1, ECad), lenient (Actin, Beta Catenin)
+# cell_diameter = 30
+# min_cell_area = 100
+# max_cell_area = 5000
+# vertex_radius = 15
+# min_rosette_cells = 5
+# confirm = false (skips final "Proceed with analysis?" Prompt)
