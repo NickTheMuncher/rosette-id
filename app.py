@@ -19,7 +19,7 @@ from pathlib import Path
 from src.cell_segmentation import load_and_validate_images, detect_cells, extract_cell_boundaries
 from src.vertex_detection import find_vertices
 from src.rosette_detection import cluster_vertices, create_base_visualization, prepare_interactive_data, generate_html_visualization, calculate_cell_neighbors
-from src.csv_export import generate_csv_export
+from src.csv_export import extract_detailed_cell_properties, count_junction_participation, build_csv_rows, export_rows_to_csv
 
 # ============================================================================
 # DEFAULT PARAMETERS
@@ -138,8 +138,17 @@ def load_config_from_file(config_path):
             raise ValueError(f"Single mode requires a valid file input_path: {input_path}")
         image_paths = [input_path]
         input_file = Path(input_path)
-        default_output = str(input_file.with_name(f"{input_file.stem}_interactive_viewer.html"))
+        default_output = str(input_file.with_name(f"{input_file.stem}_viewer.html"))
         output_path = raw.get('output_path', default_output).strip()
+        # Guard against placeholder/invalid values like ".html" that produce
+        # unusable basenames (e.g. ".html_cell_data.csv").
+        output_name = Path(output_path).name.lower()
+        if output_name in {'.html', 'html'}:
+            print(
+                "WARNING: Invalid single-mode output_path "
+                f"'{output_path}'. Falling back to default '{default_output}'."
+            )
+            output_path = default_output
         if not output_path.lower().endswith('.html'):
             output_path += '.html'
         output_dir = os.path.dirname(output_path) or '.'
@@ -327,9 +336,12 @@ def get_user_input():
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
         
-        # Ask for HTML filename
-        output_file_input = input("Enter output HTML filename (default: interactive_rosette_viewer.html): ").strip()
-        output_file = output_file_input if output_file_input else 'interactive_rosette_viewer.html'
+        # Ask for HTML filename based on input image name
+        default_single_output_name = f"{Path(input_path).stem}_viewer.html"
+        output_file_input = input(
+            f"Enter output HTML filename (default: {default_single_output_name}): "
+        ).strip()
+        output_file = output_file_input if output_file_input else default_single_output_name
         
         # Ensure .html extension
         if not output_file.endswith('.html'):
@@ -418,11 +430,18 @@ def process_single_image(image_path, output_html, output_csv, params):
     cell_pixels, cell_data, rosette_data, cell_to_rosettes = prepare_interactive_data(
         valid_cells, cell_properties, cell_boundaries, all_vertices, rosettes, cell_neighbors
     )
+
+    # Build CSV rows using ALL vertices (3+) for complete junction data
+    detailed_properties = extract_detailed_cell_properties(mask, valid_cells)
+    junction_counts = count_junction_participation(all_vertices, valid_cells)
+    csv_columns, csv_rows = build_csv_rows(detailed_properties, junction_counts, cell_neighbors)
+    export_rows_to_csv(csv_columns, csv_rows, output_csv)
+    print(f"✓ Created CSV: {output_csv}")
     
     # Generate HTML file
     html_content = generate_html_visualization(
         base_img_base64, cell_pixels, cell_data, rosette_data, cell_to_rosettes,
-        len(valid_cells), num_rosettes
+        len(valid_cells), num_rosettes, csv_columns, csv_rows, os.path.basename(output_csv)
     )
     
     # Save HTML file
@@ -430,11 +449,6 @@ def process_single_image(image_path, output_html, output_csv, params):
         f.write(html_content)
     
     print(f"✓ Created HTML: {output_html}")
-    
-    # Generate CSV export using ALL vertices (3+) for complete junction data
-    generate_csv_export(mask, valid_cells, all_vertices, cell_neighbors, output_csv)
-    
-    print(f"✓ Created CSV: {output_csv}")
     
     return {
         'success': True,
@@ -503,7 +517,7 @@ def main():
             
             # Generate output filenames
             base_name = Path(image_path).stem
-            output_html = os.path.join(config['output_path'], 'html', f"{base_name}_rosette_viewer.html")
+            output_html = os.path.join(config['output_path'], 'html', f"{base_name}_viewer.html")
             output_csv = os.path.join(config['output_path'], 'csv', f"{base_name}_cell_data.csv")
             
             try:

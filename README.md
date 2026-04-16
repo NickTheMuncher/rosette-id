@@ -329,13 +329,14 @@ Enter custom parameters (press Enter to use default):
 Enter output directory (default: current directory):
 ```
 
-#### 3.5e. Choose Output Filename (Your HTML and CSV output files will be named this)
+#### 3.5e. Choose Output Filename (Single mode)
 **Note** - If you chose batch upload, then the HTML and CSV outputs files will have the name of the raw image files in the Folder you are processing
 ```
-Enter output HTML filename (default: interactive_rosette_viewer.html):
+Enter output HTML filename (default: <input_image_stem>_viewer.html):
 ```
 
 - Type a custom name (e.g., `my_results.html`) and then Press **Enter**
+- If you press **Enter**, the default is based on your input image name (for example, `my_cells_viewer.html`)
 
 #### 3.5f. Confirm and Run
 ```
@@ -343,7 +344,7 @@ Enter output HTML filename (default: interactive_rosette_viewer.html):
 ROSETTE DETECTION CONFIGURATION
 ======================================================================
 Input image: data/my_cells.png
-Output file: interactive_rosette_viewer.html
+Output file: my_cells_viewer.html
 Cell diameter: 30 pixels
 Cell area range: 100 - 5000 pixels
 Vertex radius: 15 pixels
@@ -407,6 +408,8 @@ CSV export created: output/csv/name_of_file.csv
    - Double-click to open it in your web browser (Chrome, Firefox, Safari, Edge, etc)
    - Hover over cells to see properties
    - Click to remove/restore rosettes
+   - Download the current edited image from the viewer (**Download edited image (PNG)**)
+   - Download an updated CSV from the viewer (**Download updated CSV**)
 
 2. **CSV Data Files** (`PATH_TO_OUTPUT_FOLDER/csv/name_of_file.csv`)
    - Contains detailed cell properties
@@ -438,6 +441,9 @@ When you open `name_of_file.html`, you'll see:
 - That cell's rosette will highlight in **orange**
 - The rosette center will get bigger and show a label (R1, R2, etc.)
 - Information box shows which cell and rosette you're looking at, as well as the area, perimeter, and number of neighbors for that cell
+- Click a red dot to remove a rosette and click a grayed area to restore it
+- Use **Download edited image (PNG)** to export what you currently see in the viewer
+- Use **Download updated CSV** to export a CSV with recalculated `junctions_*` and `total_junctions` based on current active rosettes
 
 ### Understanding the Console Output
 
@@ -473,6 +479,14 @@ In addition to the interactive visualization, the program automatically generate
 - **Morphological Properties**: Area, perimeter, shape metrics (eccentricity, solidity, etc.)
 - **Location Data**: Centroid coordinates, orientation
 - **Junction Counts**: How many 3-cell, 4-cell, 5-cell, 6-cell, 7-cell, and 8+ cell junctions each cell participates in
+
+### Exporting Updated CSV from the Interactive Viewer
+
+After removing/restoring rosettes in the HTML viewer, you can click **Download updated CSV**.
+
+- The downloaded CSV keeps the original per-cell morphology/position columns.
+- The junction columns (`junctions_3_cell` ... `junctions_8plus_cell`, `total_junctions`) are recalculated from the rosettes currently active in the viewer.
+- Browser security does not allow directly overwriting files on disk from the standalone HTML, so exports are downloaded as new files.
 
 ### Testing CSV Export
 

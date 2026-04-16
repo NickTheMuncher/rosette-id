@@ -14,6 +14,47 @@ from skimage import measure
 from collections import defaultdict
 
 
+def get_csv_columns():
+    """
+    Return CSV columns in stable, logical order.
+    """
+    return [
+        # Cell identification
+        'cell_id',
+
+        # Basic morphological properties
+        'area',
+        'perimeter',
+        'centroid_x',
+        'centroid_y',
+
+        # Shape properties
+        'eccentricity',
+        'solidity',
+        'extent',
+        'major_axis_length',
+        'minor_axis_length',
+        'orientation',
+        'equivalent_diameter',
+        'convex_area',
+        'filled_area',
+        'euler_number',
+        'feret_diameter_max',
+
+        # Neighbor Counts
+        'num_neighbors',
+
+        # Junction participation counts
+        'junctions_3_cell',
+        'junctions_4_cell',
+        'junctions_5_cell',
+        'junctions_6_cell',
+        'junctions_7_cell',
+        'junctions_8plus_cell',
+        'total_junctions'
+    ]
+
+
 def extract_detailed_cell_properties(mask, valid_cells):
     """
     Extract comprehensive morphological properties for each cell using regionprops.
@@ -163,9 +204,9 @@ def count_junction_participation(vertices, valid_cells):
     return junction_counts
 
 
-def export_to_csv(detailed_properties, junction_counts, cell_neighbors, output_path):
+def build_csv_rows(detailed_properties, junction_counts, cell_neighbors):
     """
-    Export combined cell properties and junction counts to CSV file.
+    Build CSV rows (list of dicts) for export.
     
     Each row represents ONE cell with:
     - Morphological properties (area, perimeter, shape metrics)
@@ -178,79 +219,61 @@ def export_to_csv(detailed_properties, junction_counts, cell_neighbors, output_p
     Args:
         detailed_properties: Dictionary of detailed cell properties
         junction_counts: Dictionary of junction participation counts
-        output_path: Path to output CSV file
         cell_neighbors: Dictionary mapping cell_id to number of neighbors
 
+    Returns:
+        Tuple of (columns, rows)
+    """
+    columns = get_csv_columns()
+    rows = []
+
+    for cell_id in sorted(detailed_properties.keys()):
+        row_data = {}
+
+        # Add detailed properties
+        row_data.update(detailed_properties[cell_id])
+
+        # Add number of neighbors
+        row_data['num_neighbors'] = cell_neighbors.get(cell_id, 0)
+
+        # Add junction counts
+        if cell_id in junction_counts:
+            row_data.update(junction_counts[cell_id])
+        else:
+            for col in columns:
+                if col.startswith('junctions_') or col == 'total_junctions':
+                    row_data[col] = 0
+
+        # Ensure all columns exist (DictWriter will fill missing with blanks otherwise)
+        for col in columns:
+            row_data.setdefault(col, '')
+
+        # Coerce numpy scalar types to Python scalars for JSON embedding
+        for k, v in list(row_data.items()):
+            if isinstance(v, np.generic):
+                row_data[k] = v.item()
+
+        rows.append(row_data)
+
+    return columns, rows
+
+
+def export_rows_to_csv(columns, rows, output_path):
+    """
+    Write CSV rows to disk.
     """
     print("\n" + "="*70)
     print("EXPORTING DATA TO CSV")
     print("="*70)
-    
-    # Define CSV columns in logical order
-    columns = [
-        # Cell identification
-        'cell_id',
-        
-        # Basic morphological properties
-        'area',
-        'perimeter',
-        'centroid_x',
-        'centroid_y',
-        
-        # Shape properties
-        'eccentricity',
-        'solidity',
-        'extent',
-        'major_axis_length',
-        'minor_axis_length',
-        'orientation',
-        'equivalent_diameter',
-        'convex_area',
-        'filled_area',
-        'euler_number',
-        'feret_diameter_max',
 
-        # Neighbor Counts
-        'num_neighbors',
-        
-        # Junction participation counts
-        'junctions_3_cell',
-        'junctions_4_cell',
-        'junctions_5_cell',
-        'junctions_6_cell',
-        'junctions_7_cell',
-        'junctions_8plus_cell',
-        'total_junctions'
-    ]
-    
-    # Write CSV file
     with open(output_path, 'w', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=columns)
         writer.writeheader()
-        
-        # Write data for each cell
-        for cell_id in sorted(detailed_properties.keys()):
-            row_data = {}
-            
-            # Add detailed properties
-            row_data.update(detailed_properties[cell_id])
-            
-            # Add number of neighbors
-            row_data['num_neighbors'] = cell_neighbors.get(cell_id, 0)
+        for row in rows:
+            writer.writerow(row)
 
-            # Add junction counts
-            if cell_id in junction_counts:
-                row_data.update(junction_counts[cell_id])
-            else:
-                # Default to zero if no junction data
-                for col in columns:
-                    if col.startswith('junctions_') or col == 'total_junctions':
-                        row_data[col] = 0
-            
-            writer.writerow(row_data)
-    
     print(f"CSV exported successfully: {output_path}")
-    print(f"Total cells exported: {len(detailed_properties)}")
+    print(f"Total cells exported: {len(rows)}")
 
 
 def generate_csv_export(mask, valid_cells, vertices, cell_neighbors, output_path):
@@ -274,7 +297,8 @@ def generate_csv_export(mask, valid_cells, vertices, cell_neighbors, output_path
     junction_counts = count_junction_participation(vertices, valid_cells)
     
     # Export to CSV
-    export_to_csv(detailed_properties, junction_counts, cell_neighbors, output_path) 
+    columns, rows = build_csv_rows(detailed_properties, junction_counts, cell_neighbors)
+    export_rows_to_csv(columns, rows, output_path)
        
     print("\n" + "="*70)
     print("CSV EXPORT COMPLETE")
