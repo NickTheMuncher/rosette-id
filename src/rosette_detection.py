@@ -462,8 +462,9 @@ def prepare_interactive_data(valid_cells, cell_properties, cell_boundaries, vert
     return cell_pixels, cell_data, rosette_data, cell_to_rosettes
 
 
-def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette_data, 
-                                cell_to_rosettes, num_cells, num_rosettes):
+def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette_data,
+                                cell_to_rosettes, num_cells, num_rosettes,
+                                csv_columns=None, csv_rows=None, csv_filename="cell_data.csv"):
     """
     Generate interactive HTML visualization file.
     
@@ -479,10 +480,18 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
         cell_to_rosettes: Dictionary mapping cell_id to rosette indices
         num_cells: Total number of valid cells detected
         num_rosettes: Total number of rosettes identified
+        csv_columns: Optional list of CSV column names (for client-side export)
+        csv_rows: Optional list of CSV row dicts (for client-side export)
+        csv_filename: Suggested filename for exported CSV
         
     Returns:
         String containing complete HTML document
     """
+    if csv_columns is None:
+        csv_columns = []
+    if csv_rows is None:
+        csv_rows = []
+
     html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -562,6 +571,39 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
             color: #4CAF50;
             font-weight: bold;
         }}
+        #actions {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 12px;
+            align-items: center;
+        }}
+        .btn {{
+            background: #4CAF50;
+            color: #0b0b0b;
+            border: none;
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+        }}
+        .btn:hover {{
+            filter: brightness(1.05);
+        }}
+        .btn.secondary {{
+            background: #2f7bdc;
+            color: #ffffff;
+        }}
+        .btn.ghost {{
+            background: transparent;
+            border: 1px solid #555;
+            color: #ddd;
+        }}
+        #export-note {{
+            color: #aaa;
+            font-size: 12px;
+            line-height: 1.4;
+        }}
     </style>
 </head>
 <body>
@@ -580,6 +622,15 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
                 <div class="stat">
                     <div class="stat-value">{len([c for c in cell_data.values() if c['in_rosette']])}</div>
                     <div class="stat-label">Cells in Rosettes</div>
+                </div>
+            </div>
+            <div id="actions">
+                <button class="btn secondary" id="download-image-btn" type="button">Download edited image (PNG)</button>
+                <button class="btn" id="download-csv-btn" type="button">Download updated CSV</button>
+                <button class="btn ghost" id="reset-btn" type="button">Reset edits</button>
+                <div id="export-note">
+                    Exports are downloaded by your browser (the HTML can’t overwrite files on disk).<br>
+                    The updated CSV recalculates junction columns based on the current rosette edits.
                 </div>
             </div>
             <div id="hover-info">
@@ -602,6 +653,9 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
         const cellData = {json.dumps(cell_data)};
         const rosettes = {json.dumps(rosette_data)};
         const cellToRosettes = {json.dumps({int(k): v for k, v in cell_to_rosettes.items()})};
+        const csvColumns = {json.dumps(csv_columns)};
+        const csvRows = {json.dumps(csv_rows)};
+        const originalCsvFilename = {json.dumps(csv_filename)};
         
         // Load base image
         const baseImg = new Image();
@@ -711,6 +765,142 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
                     ctx.fillStyle = 'rgba(255, 140, 0, 0.5)';
                 }});
             }}
+        }}
+
+        function downloadBlob(blob, filename) {{
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }}
+
+        function downloadEditedImage() {{
+            // Ensure we export exactly what’s displayed
+            drawImage();
+            const base = (originalCsvFilename || 'cell_data.csv').replace(/_cell_data\\.csv$/i, '').replace(/\\.csv$/i, '');
+            const filename = `${{base}}_edited.png`;
+            canvas.toBlob((blob) => {{
+                if (!blob) {{
+                    alert('Could not export image (canvas toBlob failed).');
+                    return;
+                }}
+                downloadBlob(blob, filename);
+            }}, 'image/png');
+        }}
+
+        function getJunctionColumnForSize(size) {{
+            if (size === 3) return 'junctions_3_cell';
+            if (size === 4) return 'junctions_4_cell';
+            if (size === 5) return 'junctions_5_cell';
+            if (size === 6) return 'junctions_6_cell';
+            if (size === 7) return 'junctions_7_cell';
+            return 'junctions_8plus_cell';
+        }}
+
+        function computeUpdatedJunctionCounts() {{
+            const countsByCell = new Map();
+
+            for (const row of csvRows) {{
+                const id = parseInt(row.cell_id);
+                if (!Number.isFinite(id)) continue;
+                countsByCell.set(id, {{
+                    junctions_3_cell: 0,
+                    junctions_4_cell: 0,
+                    junctions_5_cell: 0,
+                    junctions_6_cell: 0,
+                    junctions_7_cell: 0,
+                    junctions_8plus_cell: 0,
+                    total_junctions: 0,
+                }});
+            }}
+
+            rosettes.forEach((rosette, rosetteIdx) => {{
+                if (removedRosettes.has(rosetteIdx)) return;
+                const size = parseInt(rosette.num_cells);
+                const col = getJunctionColumnForSize(size);
+                rosette.cells.forEach((cellId) => {{
+                    const id = parseInt(cellId);
+                    const record = countsByCell.get(id);
+                    if (!record) return;
+                    record[col] += 1;
+                    record.total_junctions += 1;
+                }});
+            }});
+
+            return countsByCell;
+        }}
+
+        function escapeCsvValue(value) {{
+            if (value === null || value === undefined) return '';
+            const s = String(value);
+            if (/[",\\n\\r]/.test(s)) {{
+                return '"' + s.replace(/"/g, '""') + '"';
+            }}
+            return s;
+        }}
+
+        function toCsv(columns, rows) {{
+            const lines = [];
+            lines.push(columns.map(escapeCsvValue).join(','));
+            for (const row of rows) {{
+                const line = columns.map((c) => escapeCsvValue(row[c])).join(',');
+                lines.push(line);
+            }}
+            return lines.join('\\r\\n');
+        }}
+
+        function downloadUpdatedCsv() {{
+            if (!csvColumns.length || !csvRows.length) {{
+                alert('CSV export data was not embedded in this HTML.');
+                return;
+            }}
+
+            const countsByCell = computeUpdatedJunctionCounts();
+
+            // Create updated rows (preserve everything except junction columns)
+            const updatedRows = csvRows.map((row) => {{
+                const id = parseInt(row.cell_id);
+                const updated = {{ ...row }};
+                const counts = countsByCell.get(id);
+                if (counts) {{
+                    updated.junctions_3_cell = counts.junctions_3_cell;
+                    updated.junctions_4_cell = counts.junctions_4_cell;
+                    updated.junctions_5_cell = counts.junctions_5_cell;
+                    updated.junctions_6_cell = counts.junctions_6_cell;
+                    updated.junctions_7_cell = counts.junctions_7_cell;
+                    updated.junctions_8plus_cell = counts.junctions_8plus_cell;
+                    updated.total_junctions = counts.total_junctions;
+                }} else {{
+                    // If a cell isn't in the map, zero out junctions to avoid stale values
+                    updated.junctions_3_cell = 0;
+                    updated.junctions_4_cell = 0;
+                    updated.junctions_5_cell = 0;
+                    updated.junctions_6_cell = 0;
+                    updated.junctions_7_cell = 0;
+                    updated.junctions_8plus_cell = 0;
+                    updated.total_junctions = 0;
+                }}
+                return updated;
+            }});
+
+            const csvText = toCsv(csvColumns, updatedRows);
+            const base = (originalCsvFilename || 'cell_data.csv').replace(/\\.csv$/i, '');
+            const filename = `${{base}}_updated.csv`;
+            const blob = new Blob([csvText], {{ type: 'text/csv;charset=utf-8' }});
+            downloadBlob(blob, filename);
+        }}
+
+        function resetEdits() {{
+            removedRosettes = new Set();
+            currentHighlightedRosettes = new Set();
+            drawImage();
+            document.getElementById('rosette-count').textContent = rosettes.length;
+            document.getElementById('hover-info').innerHTML =
+                '<strong>Instructions:</strong> Hover over any cell to see its properties. Rosette cells are shown in green. Click on a red dot to remove that rosette. Click on a grayed area to restore it.';
         }}
         
         // Handle mouse movement for interactive highlighting
@@ -828,6 +1018,10 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
                 }}
             }}
         }});
+
+        document.getElementById('download-image-btn').addEventListener('click', downloadEditedImage);
+        document.getElementById('download-csv-btn').addEventListener('click', downloadUpdatedCsv);
+        document.getElementById('reset-btn').addEventListener('click', resetEdits);
     </script>
 </body>
 </html>

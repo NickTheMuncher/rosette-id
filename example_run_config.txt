@@ -1,0 +1,109 @@
+# Rosette Identification - Example Run Config (key=value)
+#
+# Usage:
+#   python app.py --config example_run_config.txt
+#
+# Notes:
+# - Lines starting with "#" are comments.
+# - Keys are case-insensitive; spaces around "=" are allowed.
+# - Values can be unquoted or quoted with 'single' / "double" quotes.
+# - Any key not provided falls back to a default.
+#
+# -----------------------------------------------------------------------------
+# REQUIRED SETTINGS
+# -----------------------------------------------------------------------------
+# mode
+# - What to process
+# - Allowed values: single | batch
+# - Default: single
+#
+# input_path
+# - In single mode: path to an image file
+# - In batch mode:  path to a folder containing images
+# - Required: yes
+# - Supported image extensions: .tif .tiff .png .jpg .jpeg .bmp
+#
+# -----------------------------------------------------------------------------
+# OUTPUT SETTINGS
+# -----------------------------------------------------------------------------
+# output_path
+# - In single mode:
+#     - Where to write the HTML viewer
+#     - Default: <input_image_stem>_viewer.html next to the input image
+#     - If you provide a path without ".html", the program will append ".html"
+# - In batch mode:
+#     - Folder to write results into
+#     - Default: output/batch_results
+#     - The program will create:
+#         <output_path>/html/*.html
+#         <output_path>/csv/*.csv
+#
+# -----------------------------------------------------------------------------
+# DETECTION PRESET + OPTIONAL OVERRIDES
+# -----------------------------------------------------------------------------
+# detection_preset
+# - A named set of detection parameters
+# - Allowed values: sensitive | balanced | lenient
+# - Default: balanced
+# - Intended use (from project defaults):
+#     - sensitive: higher sensitivity (smaller / lower-contrast structures)
+#     - balanced: current default behavior (commonly ZO1, ECad)
+#     - lenient:  stricter filtering to reduce false positives (commonly Actin, Beta Catenin)
+#
+# You can override any preset by specifying the numeric parameters below.
+# All numeric parameters must be integers.
+#
+# cell_diameter
+# - Estimated cell diameter in pixels (CellPose)
+# - Default (balanced): 30
+#
+# min_cell_area
+# - Minimum cell area (pixels) to be considered valid
+# - Default (balanced): 100
+#
+# max_cell_area
+# - Maximum cell area (pixels) to be considered valid
+# - Default (balanced): 5000
+#
+# vertex_radius
+# - Search radius in pixels used when finding vertices and clustering rosettes
+# - Default (balanced): 15
+#
+# min_rosette_cells
+# - Minimum cells required to form a rosette (for visualization)
+# - Default (balanced): 5
+#
+# -----------------------------------------------------------------------------
+# PROMPT / UX SETTINGS
+# -----------------------------------------------------------------------------
+# confirm
+# - Whether to show the final "Proceed with analysis?" prompt
+# - Allowed values:
+#     true/false, yes/no, y/n, on/off, 1/0
+# - Default: true
+# - Example: confirm = false
+#
+# -----------------------------------------------------------------------------
+# EXAMPLE CONFIGS
+# -----------------------------------------------------------------------------
+# Example A: Batch processing (folder of images)
+
+mode = batch
+input_path = data/Ecad
+output_path = output/batch_results
+detection_preset = balanced
+
+# Optional overrides:
+# cell_diameter = 30
+# min_cell_area = 100
+# max_cell_area = 5000
+# vertex_radius = 15
+# min_rosette_cells = 5
+# confirm = false
+#
+# Example B: Single image (writes a single HTML + CSV next to it)
+# mode = single
+# input_path = data/my_image.tif
+# output_path = output/my_custom_viewer.html
+# detection_preset = balanced
+# confirm = false
