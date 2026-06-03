@@ -18,138 +18,142 @@ from scipy.ndimage import binary_dilation
 def filter_rosette_vertices(vertices, min_cells_for_rosette=5):
     """
     Filter vertices to only include those with enough cells to be rosettes.
-    
+
     Args:
         vertices: List of all vertex dictionaries
         min_cells_for_rosette: Minimum cells required for a rosette (default: 5)
-        
+
     Returns:
         List of vertex dictionaries that qualify as potential rosettes
     """
-    rosette_vertices = [v for v in vertices if v['num_cells'] >= min_cells_for_rosette]
-    print(f"Filtered {len(rosette_vertices)} rosette candidates (5+ cells) from {len(vertices)} total vertices")
+    rosette_vertices = [v for v in vertices if v["num_cells"] >= min_cells_for_rosette]
+    print(
+        f"Filtered {len(rosette_vertices)} rosette candidates (5+ cells) from {len(vertices)} total vertices"
+    )
     return rosette_vertices
 
 
 def cluster_vertices(vertices, vertex_radius, min_cells_for_rosette=5):
     """
     Filter for rosette vertices and merge nearby ones that likely represent the same rosette.
-    
+
     First filters vertices to only those with min_cells_for_rosette or more cells.
     Then, vertices within 1.5 * vertex_radius of each other are merged by averaging
     their locations and combining their cell lists.
-    
+
     Args:
         vertices: List of ALL vertex dictionaries (including small junctions)
         vertex_radius: Radius used for vertex detection (pixels)
         min_cells_for_rosette: Minimum cells required for a rosette (default: 5)
-        
+
     Returns:
         List of merged rosette dictionaries
     """
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("STEP 4: FILTERING AND CLUSTERING ROSETTE VERTICES")
-    print("="*70)
-    
+    print("=" * 70)
+
     # First, filter for rosette vertices only (5+ cells)
     rosette_vertices = filter_rosette_vertices(vertices, min_cells_for_rosette)
-    
+
     if len(rosette_vertices) == 0:
         print("No rosettes found (no vertices with 5+ cells)")
         return []
-    
-    vertex_locations = np.array([v['location'] for v in rosette_vertices])
-    
+
+    vertex_locations = np.array([v["location"] for v in rosette_vertices])
+
     # Use distance-based clustering to merge nearby vertices
     merge_distance = vertex_radius * 1.5
     merged_vertices = []
     used = set()
-    
+
     for i, vertex in enumerate(rosette_vertices):
         if i in used:
             continue
-        
+
         # Find all vertices within merge_distance
         loc = vertex_locations[i]
-        distances = np.sqrt(np.sum((vertex_locations - loc)**2, axis=1))
+        distances = np.sqrt(np.sum((vertex_locations - loc) ** 2, axis=1))
         nearby_indices = np.where(distances <= merge_distance)[0]
-        
+
         # Merge all nearby vertices
         merged_cells = set()
         merged_locations = []
         for idx in nearby_indices:
-            merged_cells.update(rosette_vertices[idx]['cells'])
+            merged_cells.update(rosette_vertices[idx]["cells"])
             merged_locations.append(vertex_locations[idx])
             used.add(idx)
-        
+
         # Calculate average location
         avg_location = np.mean(merged_locations, axis=0)
-        
-        merged_vertices.append({
-            'location': tuple(avg_location.astype(int)),
-            'cells': list(merged_cells),
-            'num_cells': len(merged_cells)
-        })
-    
+
+        merged_vertices.append(
+            {
+                "location": tuple(avg_location.astype(int)),
+                "cells": list(merged_cells),
+                "num_cells": len(merged_cells),
+            }
+        )
+
     print(f"Identified {len(merged_vertices)} rosettes after merging nearby vertices")
-    
+
     return merged_vertices
 
 
 def calculate_perimeter(cell_mask):
     """
     Calculate perimeter using numpy shifts (10-20x faster than scipy).
-    
+
     Args:
         cell_mask: Boolean numpy array
-        
+
     Returns:
         Integer perimeter in pixels
     """
     # Pad the mask
-    padded = np.pad(cell_mask, 1, mode='constant', constant_values=False)
-    
+    padded = np.pad(cell_mask, 1, mode="constant", constant_values=False)
+
     # A pixel is boundary if it's True and any of its 4 neighbors is False
     boundary = (
-        (padded[1:-1, 1:-1] & ~padded[:-2, 1:-1]) |   
-        (padded[1:-1, 1:-1] & ~padded[2:, 1:-1]) |    
-        (padded[1:-1, 1:-1] & ~padded[1:-1, :-2]) |  
-        (padded[1:-1, 1:-1] & ~padded[1:-1, 2:])      
+        (padded[1:-1, 1:-1] & ~padded[:-2, 1:-1])
+        | (padded[1:-1, 1:-1] & ~padded[2:, 1:-1])
+        | (padded[1:-1, 1:-1] & ~padded[1:-1, :-2])
+        | (padded[1:-1, 1:-1] & ~padded[1:-1, 2:])
     )
-    
+
     return int(np.sum(boundary))
 
 
 def calculate_cell_neighbors(valid_cells, cell_boundaries):
     """
     Neighbor calculation using bounding box prefiltering.
-    
+
     - Compute bounding box for each cell (O(n))
     - Only check cells whose bounding boxes are close (O(n * k) where k << n)
     - Verify actual boundary adjacency for candidates
-    
+
     Args:
         valid_cells: List of valid cell IDs
         cell_boundaries: Dictionary mapping cell_id to boundary coordinates
-        
+
     Returns:
         Dictionary mapping cell_id -> number of neighboring cells
     """
     print("  Computing bounding boxes...")
-    
+
     # Compute bounding boxes and convert boundaries to sets
     bounding_boxes = {}
     boundary_sets = {}
-    
+
     for cell_id in valid_cells:
         if cell_id not in cell_boundaries:
             continue
-        
+
         boundary = cell_boundaries[cell_id]
         pixel_set = set()
-        min_y, max_y = float('inf'), float('-inf')
-        min_x, max_x = float('inf'), float('-inf')
-        
+        min_y, max_y = float("inf"), float("-inf")
+        min_x, max_x = float("inf"), float("-inf")
+
         for coord in boundary:
             if isinstance(coord, (list, tuple)) and len(coord) >= 2:
                 y, x = int(coord[0]), int(coord[1])
@@ -157,76 +161,89 @@ def calculate_cell_neighbors(valid_cells, cell_boundaries):
                 y, x = int(coord[0]), int(coord[1])
             else:
                 continue
-            
+
             pixel_set.add((y, x))
             min_y, max_y = min(min_y, y), max(max_y, y)
             min_x, max_x = min(min_x, x), max(max_x, x)
-        
+
         if pixel_set:
             boundary_sets[cell_id] = pixel_set
             bounding_boxes[cell_id] = (min_y, max_y, min_x, max_x)
-    
+
     print(f"  ✓ Processed {len(bounding_boxes)} cells")
-    
+
     # Build spatial grid for fast bounding box queries
     print("  Building spatial grid...")
     grid_size = 50  # pixels per grid cell
     grid = defaultdict(list)
-    
+
     for cell_id, (min_y, max_y, min_x, max_x) in bounding_boxes.items():
         # Add cell to all grid cells it overlaps
         grid_min_y, grid_max_y = min_y // grid_size, max_y // grid_size
         grid_min_x, grid_max_x = min_x // grid_size, max_x // grid_size
-        
+
         for gy in range(grid_min_y, grid_max_y + 1):
             for gx in range(grid_min_x, grid_max_x + 1):
                 grid[(gy, gx)].append(cell_id)
-    
+
     print(f"  ✓ Built grid with {len(grid)} occupied cells")
-    
+
     # Find candidates using grid, then verify
     print("  Finding neighbor candidates...")
     cell_neighbors = defaultdict(int)
-    neighbor_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-    
+    neighbor_offsets = [
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ]
+
     checked_pairs = set()
     candidates_tested = 0
     neighbors_found = 0
-    
+
     for cell1 in boundary_sets.keys():
         min_y1, max_y1, min_x1, max_x1 = bounding_boxes[cell1]
-        
+
         # Find candidate neighbors from nearby grid cells
         candidates = set()
         grid_min_y, grid_max_y = min_y1 // grid_size - 1, max_y1 // grid_size + 1
         grid_min_x, grid_max_x = min_x1 // grid_size - 1, max_x1 // grid_size + 1
-        
+
         for gy in range(grid_min_y, grid_max_y + 1):
             for gx in range(grid_min_x, grid_max_x + 1):
                 candidates.update(grid.get((gy, gx), []))
-        
+
         # Remove self
         candidates.discard(cell1)
-        
+
         # Quick bounding box check for candidates
         for cell2 in candidates:
             if (cell1, cell2) in checked_pairs or (cell2, cell1) in checked_pairs:
                 continue
-            
+
             checked_pairs.add((cell1, cell2))
-            
+
             # Bounding box proximity check (must be within 1 pixel)
             min_y2, max_y2, min_x2, max_x2 = bounding_boxes[cell2]
-            
-            if (min_y1 > max_y2 + 1 or max_y1 < min_y2 - 1 or
-                min_x1 > max_x2 + 1 or max_x1 < min_x2 - 1):
+
+            if (
+                min_y1 > max_y2 + 1
+                or max_y1 < min_y2 - 1
+                or min_x1 > max_x2 + 1
+                or max_x1 < min_x2 - 1
+            ):
                 continue  # Bounding boxes too far apart
-            
+
             # Verify actual boundary adjacency
             candidates_tested += 1
             boundary1 = boundary_sets[cell1]
             boundary2 = boundary_sets[cell2]
-            
+
             are_neighbors = False
             for y1, x1 in boundary1:
                 if are_neighbors:
@@ -236,59 +253,65 @@ def calculate_cell_neighbors(valid_cells, cell_boundaries):
                         are_neighbors = True
                         neighbors_found += 1
                         break
-            
+
             if are_neighbors:
                 cell_neighbors[cell1] += 1
                 cell_neighbors[cell2] += 1
-            
+
             if candidates_tested % 10000 == 0:
-                print(f"    Tested {candidates_tested} candidates, found {neighbors_found} neighbors...")
-    
+                print(
+                    f"    Tested {candidates_tested} candidates, found {neighbors_found} neighbors..."
+                )
+
     print(f"  ✓ Tested {candidates_tested} candidate pairs")
     print(f"  ✓ Found {neighbors_found} neighbor relationships")
     if len(boundary_sets) > 0:
-        total_possible = len(boundary_sets)*(len(boundary_sets)-1)//2
-        print(f"  ✓ Speedup: Tested only {candidates_tested} instead of {total_possible} pairs")
-    
+        total_possible = len(boundary_sets) * (len(boundary_sets) - 1) // 2
+        print(
+            f"  ✓ Speedup: Tested only {candidates_tested} instead of {total_possible} pairs"
+        )
+
     return dict(cell_neighbors)
 
 
 def calculate_cell_vertices(valid_cells, vertices):
     """
     Calculate vertex counts from rosette vertices.
-    
+
     Args:
         valid_cells: List of valid cell IDs
         vertices: List of vertex dictionaries (rosette vertices only)
-        
+
     Returns:
         Dictionary mapping cell_id -> number of vertices
     """
     cell_vertex_count = defaultdict(int)
-    
+
     for vertex in vertices:
-        for cell_id in vertex['cells']:
+        for cell_id in vertex["cells"]:
             cell_vertex_count[cell_id] += 1
-    
+
     return dict(cell_vertex_count)
 
 
-def create_base_visualization(img, valid_cells, cell_properties, all_vertices, min_cells_for_rosette=5):
+def create_base_visualization(
+    img, valid_cells, cell_properties, all_vertices, min_cells_for_rosette=5
+):
     """
     Create base image with cell outlines and rosette cells highlighted in green.
     Only cells that participate in vertices with min_cells_for_rosette+ cells are highlighted.
     Red dots are NOT drawn here - they will be drawn dynamically in JavaScript.
-    
+
     Uses PIL to ensure exact pixel-coordinate correspondence between the base
     image and the JavaScript canvas overlay.
-    
+
     Args:
         img: Original image array
         valid_cells: List of valid cell IDs
         cell_properties: Dictionary with cell properties
         all_vertices: List of all vertex dictionaries (for determining which cells to highlight)
         min_cells_for_rosette: Minimum cells at a vertex to highlight (default: 5)
-        
+
     Returns:
         Base64-encoded PNG string of the visualization
     """
@@ -297,71 +320,75 @@ def create_base_visualization(img, valid_cells, cell_properties, all_vertices, m
         base_img = img
     else:
         base_img = np.stack([img, img, img], axis=-1)
-    
+
     if base_img.max() > 1:
-        base_img_normalized = (base_img.astype(float) / base_img.max() * 255).astype(np.uint8)
+        base_img_normalized = (base_img.astype(float) / base_img.max() * 255).astype(
+            np.uint8
+        )
     else:
         base_img_normalized = (base_img * 255).astype(np.uint8)
-    
+
     # Convert to PIL Image
     base_pil = Image.fromarray(base_img_normalized)
-    
+
     # Create transparent overlay layer
-    overlay = Image.new('RGBA', base_pil.size, (0, 0, 0, 0))
+    overlay = Image.new("RGBA", base_pil.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    
+
     # Draw all cell outlines in cyan
     outline_color = (0, 255, 255, 180)  # Cyan with transparency
-    
+
     for cell_id in valid_cells:
-        cell_mask = cell_properties[cell_id]['mask']
-        
+        cell_mask = cell_properties[cell_id]["mask"]
+
         # Get outline by dilation
         dilated = binary_dilation(cell_mask, iterations=1)
         outline = dilated & ~cell_mask
         ys, xs = np.where(outline)
-        
+
         # Draw outline pixels
         for y, x in zip(ys, xs):
             overlay.putpixel((x, y), outline_color)
-    
+
     # Find cells that participate in 5+ cell vertices (not merged rosettes)
     rosette_cells = set()
     for vertex in all_vertices:
-        if len(vertex['cells']) >= min_cells_for_rosette:
-            rosette_cells.update(vertex['cells'])
-    
+        if len(vertex["cells"]) >= min_cells_for_rosette:
+            rosette_cells.update(vertex["cells"])
+
     # Highlight rosette cells in green
     green_color = (0, 255, 0, 76)  # Green with 30% opacity
-    
+
     for cell_id in rosette_cells:
         if cell_id in cell_properties:
-            cell_mask = cell_properties[cell_id]['mask']
+            cell_mask = cell_properties[cell_id]["mask"]
             ys, xs = np.where(cell_mask)
-            
+
             # Draw filled pixels
             for y, x in zip(ys, xs):
                 overlay.putpixel((x, y), green_color)
-    
+
     # Composite overlay onto base image
-    base_pil = base_pil.convert('RGBA')
+    base_pil = base_pil.convert("RGBA")
     final_img = Image.alpha_composite(base_pil, overlay)
-        
+
     # Convert to base64 for HTML embedding
     buf = BytesIO()
-    final_img.save(buf, format='PNG')
+    final_img.save(buf, format="PNG")
     buf.seek(0)
     base_img_base64 = base64.b64encode(buf.read()).decode()
-    
+
     return base_img_base64
 
 
-def prepare_interactive_data(valid_cells, cell_properties, cell_boundaries, vertices, rosettes, cell_neighbors):
+def prepare_interactive_data(
+    valid_cells, cell_properties, cell_boundaries, vertices, rosettes, cell_neighbors
+):
     """
     - Bounding box prefiltering for speed
     - Uses spatial grid to quickly find candidate neighbors,
       then verifies with actual boundary checking.
-    
+
     Args:
         valid_cells: List of valid cell IDs
         cell_properties: Dictionary with cell properties
@@ -370,108 +397,122 @@ def prepare_interactive_data(valid_cells, cell_properties, cell_boundaries, vert
         rosettes: List of rosette dictionaries
         cell_neighbors: Dictionary mapping cell_id to number of neighbors (pre-calculated)
 
-        
+
     Returns:
         Tuple of (cell_pixels, cell_data, rosette_data, cell_to_rosettes)
     """
     import time
-    
-    print("\n" + "="*70)
+
+    print("\n" + "=" * 70)
     print("PREPARING INTERACTIVE DATA (HYBRID - BOUNDING BOX PREFILTER)")
-    print("="*70)
+    print("=" * 70)
 
     # Cell_neighbors is now passed as parameter (calculated once in app.py)
     print(f"Using pre-calculated neighbor data ({len(cell_neighbors)} cells)")
-
 
     # Calculate vertex counts
     print("Calculating cell vertices...")
     cell_vertex_count = defaultdict(int)
     for vertex in vertices:
-        for cell_id in vertex['cells']:
+        for cell_id in vertex["cells"]:
             cell_vertex_count[cell_id] += 1
     cell_vertex_count = dict(cell_vertex_count)
-    
+
     # Build cell-to-rosettes mapping
     cell_to_rosettes = defaultdict(list)
     for rosette_idx, rosette in enumerate(rosettes):
-        for cell_id in rosette['cells']:
+        for cell_id in rosette["cells"]:
             cell_to_rosettes[cell_id].append(rosette_idx)
-    
+
     # Prepare pixel data
     print(f"Processing {len(valid_cells)} cells...")
     start = time.time()
-    
+
     cell_pixels = {}
     cell_data = {}
     batch_size = 200
     total_pixels = 0
-    
+
     for i in range(0, len(valid_cells), batch_size):
-        batch = valid_cells[i:i+batch_size]
-        
+        batch = valid_cells[i : i + batch_size]
+
         for cell_id in batch:
-            ys, xs = np.where(cell_properties[cell_id]['mask'])
+            ys, xs = np.where(cell_properties[cell_id]["mask"])
             cell_pixels[int(cell_id)] = np.column_stack([ys, xs]).tolist()
-            
-            cell_mask = cell_properties[cell_id]['mask']
-            padded = np.pad(cell_mask, 1, mode='constant', constant_values=False)
+
+            cell_mask = cell_properties[cell_id]["mask"]
+            padded = np.pad(cell_mask, 1, mode="constant", constant_values=False)
             boundary = (
-                (padded[1:-1, 1:-1] & ~padded[:-2, 1:-1]) |
-                (padded[1:-1, 1:-1] & ~padded[2:, 1:-1]) |
-                (padded[1:-1, 1:-1] & ~padded[1:-1, :-2]) |
-                (padded[1:-1, 1:-1] & ~padded[1:-1, 2:])
+                (padded[1:-1, 1:-1] & ~padded[:-2, 1:-1])
+                | (padded[1:-1, 1:-1] & ~padded[2:, 1:-1])
+                | (padded[1:-1, 1:-1] & ~padded[1:-1, :-2])
+                | (padded[1:-1, 1:-1] & ~padded[1:-1, 2:])
             )
             perimeter = int(np.sum(boundary))
-            
+
             cell_data[int(cell_id)] = {
-                'area': int(cell_properties[cell_id]['area']),
-                'perimeter': perimeter,
-                'num_neighbors': cell_neighbors.get(cell_id, 0),
-                'num_vertices': cell_vertex_count.get(cell_id, 0),
-                'in_rosette': cell_id in cell_to_rosettes
+                "area": int(cell_properties[cell_id]["area"]),
+                "perimeter": perimeter,
+                "num_neighbors": cell_neighbors.get(cell_id, 0),
+                "num_vertices": cell_vertex_count.get(cell_id, 0),
+                "in_rosette": cell_id in cell_to_rosettes,
             }
-            
+
             total_pixels += len(ys)
-        
+
         processed = min(i + batch_size, len(valid_cells))
         if processed % 400 == 0 or processed == len(valid_cells):
             print(f"  Processed {processed}/{len(valid_cells)} cells...")
-    
+
     elapsed = time.time() - start
     print(f"✓ Cell processing complete in {elapsed:.1f}s")
-    
+
     # Prepare rosette data
     rosette_data = []
     for idx, rosette in enumerate(rosettes):
-        rosette_data.append({
-            'id': idx,
-            'cells': [int(c) for c in rosette['cells']],
-            'center': [int(rosette['location'][0]), int(rosette['location'][1])],
-            'num_cells': rosette['num_cells']
-        })
-    
-    print(f"✓ Prepared data for {len(cell_pixels)} cells in {len(rosette_data)} rosettes")
+        rosette_data.append(
+            {
+                "id": idx,
+                "cells": [int(c) for c in rosette["cells"]],
+                "center": [int(rosette["location"][0]), int(rosette["location"][1])],
+                "num_cells": rosette["num_cells"],
+            }
+        )
+
+    print(
+        f"✓ Prepared data for {len(cell_pixels)} cells in {len(rosette_data)} rosettes"
+    )
     if cell_neighbors:
         neighbor_values = [v for v in cell_neighbors.values() if v > 0]
         if neighbor_values:
             print(f"  - Average neighbors per cell: {np.mean(neighbor_values):.1f}")
-            print(f"  - Cells with neighbors: {len(neighbor_values)}/{len(valid_cells)}")
-    print("="*70)
-    
+            print(
+                f"  - Cells with neighbors: {len(neighbor_values)}/{len(valid_cells)}"
+            )
+    print("=" * 70)
+
     return cell_pixels, cell_data, rosette_data, cell_to_rosettes
 
 
-def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette_data,
-                                cell_to_rosettes, num_cells, num_rosettes,
-                                csv_columns=None, csv_rows=None, csv_filename="cell_data.csv"):
+def generate_html_visualization(
+    base_img_base64,
+    cell_pixels,
+    cell_data,
+    rosette_data,
+    cell_to_rosettes,
+    num_cells,
+    num_rosettes,
+    csv_columns=None,
+    csv_rows=None,
+    csv_filename="cell_data.csv",
+):
     """
     Generate interactive HTML visualization file.
-    
+
     Creates an HTML file with embedded JavaScript that allows users to hover
     over cells and see their properties and associated rosettes. Red dots are
     drawn dynamically and can be removed by clicking.
-    
+
     Args:
         base_img_base64: Base64-encoded PNG string of base visualization
         cell_pixels: Dictionary mapping cell_id to pixel coordinates
@@ -483,7 +524,7 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
         csv_columns: Optional list of CSV column names (for client-side export)
         csv_rows: Optional list of CSV row dicts (for client-side export)
         csv_filename: Suggested filename for exported CSV
-        
+
     Returns:
         String containing complete HTML document
     """
@@ -620,7 +661,7 @@ def generate_html_visualization(base_img_base64, cell_pixels, cell_data, rosette
                     <div class="stat-label">Total Rosettes</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value">{len([c for c in cell_data.values() if c['in_rosette']])}</div>
+                    <div class="stat-value">{len([c for c in cell_data.values() if c["in_rosette"]])}</div>
                     <div class="stat-label">Cells in Rosettes</div>
                 </div>
             </div>
