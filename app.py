@@ -71,7 +71,7 @@ def list_images_in_folder(folder_path):
     for ext in IMAGE_EXTENSIONS:
         image_files.extend(glob.glob(os.path.join(folder_path, f"*{ext}")))
         image_files.extend(glob.glob(os.path.join(folder_path, f"*{ext.upper()}")))
-    return sorted(image_files)
+    return sorted(set(image_files))
 
 
 def parse_simple_text_config(config_path):
