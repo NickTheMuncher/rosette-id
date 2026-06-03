@@ -14,4 +14,4 @@ Date: November 2025
 """
 
 __version__ = "1.0.0"
-__all__ = ['cell_segmentation', 'vertex_detection', 'rosette_detection']
+__all__ = ["cell_segmentation", "vertex_detection", "rosette_detection"]
