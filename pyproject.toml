@@ -1,4 +1,4 @@
-# currentlyt not really intended to be used like a python project, but i'm adding a pyproject.toml file so I can use ruff
+# currentlyt not really intended to be used like a python project, but i'm adding a pyproject.toml file so I can set ruff rules
 [tool.ruff]
 exclude = [".git", "node_modules", "venv"]
 line-length = 88
