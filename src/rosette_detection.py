@@ -14,6 +14,10 @@ from collections import defaultdict
 from PIL import Image, ImageDraw
 from scipy.ndimage import binary_dilation
 
+from shapely.geometry import Point
+from shapely.affinity import scale, rotate
+from shapely.strtree import STRtree
+
 
 def filter_rosette_vertices(vertices, min_cells_for_rosette=5):
     """
@@ -122,6 +126,57 @@ def calculate_perimeter(cell_mask):
     )
 
     return int(np.sum(boundary))
+
+
+def make_cell_elipse(mask, cell_id, scale_factor=1.25):
+    """
+    Build a bounding elipse for a cell from a cellpose mask
+    """
+
+    y, x = np.where(mask == cell_id)
+    points = np.stack([x, y], axis=1).astype(float)
+
+    # might be able to use centroid + major/ minor axis instead of doing these calculations
+    # principal component analysis, finds the natural axis of the cell
+    mx, my = points.mean(axis=0)
+    centered = points - [mx, my]
+    cov = np.cov(centered.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+
+    a = scale_factor * 2 * np.sqrt(eigenvalues[1])  # major axis
+    b = scale_factor * 2 * np.sqrt(eigenvalues[0])  # minor axis
+
+    angle = np.degrees(np.arctan2(eigenvectors[1, 1], eigenvectors[0, 1]))
+
+    ellipse = rotate(scale(Point(mx, my).buffer(1.0, resolution=64), a, b), angle)
+
+    return ellipse, (x, y, a, b, angle)
+
+
+def find_cell_neighbors(mask, valid_cells):
+    """
+    Returns dict mapping each cell_id to a list of neighboring cell_ids, neighbors are defined as cells who's bounding elipses intersect
+    """
+    ellipses = {}
+    for cell_id in valid_cells:
+        ellipse, params = make_cell_elipse(mask, cell_id)
+        ellipses[cell_id] = ellipse
+
+    neighbors = {cell_id: 0 for cell_id in valid_cells}
+    # R tree uses bounding boxes to determine if which cells are "worth" comparing against
+    # decreases number of cells tested by ruling out cells as who's ellipses cannot intersect (since R tree sorts shapes spatially)
+    shapes = list(ellipses.values())
+    ids = list(ellipses.keys())
+    tree = STRtree(shapes)
+
+    for cell_id, ellipse in ellipses.items():
+        candidate_indices = tree.query(ellipse, predicate="intersects")
+        for idx in candidate_indices:
+            neighbor_id = ids[idx]  # convert shapely id to cell_id
+            if neighbor_id != cell_id:
+                # could easily make list of neighbor ids, for now will store num
+                neighbors[cell_id] += 1
+    return neighbors
 
 
 def calculate_cell_neighbors(valid_cells, cell_boundaries):
