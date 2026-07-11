@@ -473,7 +473,6 @@ def process_single_image(image_path, output_html, output_csv, params):
 
     # Calculate cell neighbors once (used for both visualization and CSV export)
     print("Calculating cell neighbors...")
-    # cell_neighbors = calculate_cell_neighbors(valid_cells, cell_boundaries)
     cell_neighbors = find_cell_neighbors(mask, valid_cells)
     # Generate base visualization image
     base_img_base64 = create_base_visualization(
