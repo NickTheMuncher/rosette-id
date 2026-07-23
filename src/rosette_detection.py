@@ -14,7 +14,9 @@ from collections import defaultdict
 from PIL import Image, ImageDraw
 from scipy.ndimage import binary_dilation
 
-from shapely.geometry import Point
+import cv2
+from shapely.geometry import Point, Polygon
+from shapely.ops import nearest_points
 from shapely.affinity import scale, rotate
 from shapely.strtree import STRtree
 
@@ -104,6 +106,29 @@ def cluster_vertices(vertices, vertex_radius, min_cells_for_rosette=5):
     return merged_vertices
 
 
+def make_cell_polygon(mask, cell_id):
+    """
+    Build the true polygon outline of a cell from its mask footprint. Used to find the closest points
+    between two cells
+    """
+    cell_mask = (mask == cell_id).astype(np.uint8)
+    contours, _ = cv2.findContours(
+        cell_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    # guard against noisy/disconnected masks - use the largest contour
+    contour = max(contours, key=cv2.contourArea).squeeze(axis=1)  # (N, 2) x,y
+
+    if len(contour) < 3:
+        x, y = contour.mean(axis=0)
+        return Point(x, y).buffer(0.5)
+
+    polygon = Polygon(contour)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)  # repair self-intersections from pixel staircasing
+
+    return polygon
+
+
 def make_cell_elipse(mask, cell_id, scale_factor=1.25):
     """
     Build a bounding elipse for a cell from a cellpose mask
@@ -131,7 +156,7 @@ def make_cell_elipse(mask, cell_id, scale_factor=1.25):
 
 def check_intersection(mask, p1, p2, cell_id, neighbor_id, num_samples=None):
     """
-    Check whether the straight line between two cell centroids passes
+    Check whether the straight line between two cell points passes
     through a third, different cell's mask footprint.
     """
     if num_samples is None:
@@ -160,13 +185,13 @@ def find_cell_neighbors(mask, valid_cells):
     blocked_pairs = 0
 
     ellipses = {}
-    centroids = {}
+    polygons = {}
 
     for cell_id in valid_cells:
         ellipse, params = make_cell_elipse(mask, cell_id)
         mx, my, a, b, angle = params
         ellipses[cell_id] = ellipse
-        centroids[cell_id] = (mx, my)
+        polygons[cell_id] = make_cell_polygon(mask, cell_id)
 
     neighbors = {cell_id: 0 for cell_id in valid_cells}
     # R tree uses bounding boxes to determine if which cells are "worth" comparing against
@@ -182,8 +207,9 @@ def find_cell_neighbors(mask, valid_cells):
             neighbor_id = ids[idx]  # convert shapely id to cell_id
             if neighbor_id == cell_id:
                 continue
-            p1 = centroids[cell_id]
-            p2 = centroids[neighbor_id]
+            p1_geom, p2_geom = nearest_points(polygons[cell_id], polygons[neighbor_id])
+            p1 = (p1_geom.x, p1_geom.y)
+            p2 = (p2_geom.x, p2_geom.y)
             if check_intersection(mask, p1, p2, cell_id, neighbor_id):
                 blocked_pairs += 1
                 continue
