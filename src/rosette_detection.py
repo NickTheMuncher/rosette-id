@@ -14,6 +14,12 @@ from collections import defaultdict
 from PIL import Image, ImageDraw
 from scipy.ndimage import binary_dilation
 
+import cv2
+from shapely.geometry import Point, Polygon
+from shapely.ops import nearest_points
+from shapely.affinity import scale, rotate
+from shapely.strtree import STRtree
+
 
 def filter_rosette_vertices(vertices, min_cells_for_rosette=5):
     """
@@ -100,178 +106,120 @@ def cluster_vertices(vertices, vertex_radius, min_cells_for_rosette=5):
     return merged_vertices
 
 
-def calculate_perimeter(cell_mask):
+def make_cell_polygon(mask, cell_id):
     """
-    Calculate perimeter using numpy shifts (10-20x faster than scipy).
-
-    Args:
-        cell_mask: Boolean numpy array
-
-    Returns:
-        Integer perimeter in pixels
+    Build the true polygon outline of a cell from its mask footprint. Used to find the closest points
+    between two cells
     """
-    # Pad the mask
-    padded = np.pad(cell_mask, 1, mode="constant", constant_values=False)
-
-    # A pixel is boundary if it's True and any of its 4 neighbors is False
-    boundary = (
-        (padded[1:-1, 1:-1] & ~padded[:-2, 1:-1])
-        | (padded[1:-1, 1:-1] & ~padded[2:, 1:-1])
-        | (padded[1:-1, 1:-1] & ~padded[1:-1, :-2])
-        | (padded[1:-1, 1:-1] & ~padded[1:-1, 2:])
+    cell_mask = (mask == cell_id).astype(np.uint8)
+    contours, _ = cv2.findContours(
+        cell_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
+    # guard against noisy/disconnected masks - use the largest contour
+    contour = max(contours, key=cv2.contourArea).squeeze(axis=1)  # (N, 2) x,y
 
-    return int(np.sum(boundary))
+    if len(contour) < 3:
+        x, y = contour.mean(axis=0)
+        return Point(x, y).buffer(0.5)
+
+    polygon = Polygon(contour)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)  # repair self-intersections from pixel staircasing
+
+    return polygon
 
 
-def calculate_cell_neighbors(valid_cells, cell_boundaries):
+def make_cell_elipse(mask, cell_id, scale_factor=1.25):
     """
-    Neighbor calculation using bounding box prefiltering.
-
-    - Compute bounding box for each cell (O(n))
-    - Only check cells whose bounding boxes are close (O(n * k) where k << n)
-    - Verify actual boundary adjacency for candidates
-
-    Args:
-        valid_cells: List of valid cell IDs
-        cell_boundaries: Dictionary mapping cell_id to boundary coordinates
-
-    Returns:
-        Dictionary mapping cell_id -> number of neighboring cells
+    Build a bounding elipse for a cell from a cellpose mask
     """
-    print("  Computing bounding boxes...")
 
-    # Compute bounding boxes and convert boundaries to sets
-    bounding_boxes = {}
-    boundary_sets = {}
+    y, x = np.where(mask == cell_id)
+    points = np.stack([x, y], axis=1).astype(float)
 
-    for cell_id in valid_cells:
-        if cell_id not in cell_boundaries:
-            continue
+    # might be able to use centroid + major/ minor axis instead
+    # principal component analysis, finds the natural axis of the cell
+    mx, my = points.mean(axis=0)
+    centered = points - [mx, my]
+    cov = np.cov(centered.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
 
-        boundary = cell_boundaries[cell_id]
-        pixel_set = set()
-        min_y, max_y = float("inf"), float("-inf")
-        min_x, max_x = float("inf"), float("-inf")
+    a = scale_factor * 2 * np.sqrt(eigenvalues[1])  # major axis
+    b = scale_factor * 2 * np.sqrt(eigenvalues[0])  # minor axis
 
-        for coord in boundary:
-            if isinstance(coord, (list, tuple)) and len(coord) >= 2:
-                y, x = int(coord[0]), int(coord[1])
-            elif isinstance(coord, np.ndarray) and len(coord) >= 2:
-                y, x = int(coord[0]), int(coord[1])
-            else:
-                continue
+    angle = np.degrees(np.arctan2(eigenvectors[1, 1], eigenvectors[0, 1]))
 
-            pixel_set.add((y, x))
-            min_y, max_y = min(min_y, y), max(max_y, y)
-            min_x, max_x = min(min_x, x), max(max_x, x)
+    ellipse = rotate(scale(Point(mx, my).buffer(1.0, resolution=64), a, b), angle)
 
-        if pixel_set:
-            boundary_sets[cell_id] = pixel_set
-            bounding_boxes[cell_id] = (min_y, max_y, min_x, max_x)
+    return ellipse, (mx, my, a, b, angle)
 
-    print(f"  ✓ Processed {len(bounding_boxes)} cells")
 
-    # Build spatial grid for fast bounding box queries
-    print("  Building spatial grid...")
-    grid_size = 50  # pixels per grid cell
-    grid = defaultdict(list)
+def check_intersection(mask, p1, p2, cell_id, neighbor_id, num_samples=None):
+    """
+    Check whether the straight line between two cell points passes
+    through a third, different cell's mask footprint.
+    """
+    if num_samples is None:
+        # roughly one sample per pixel along the line
+        num_samples = int(np.hypot(p2[0] - p1[0], p2[1] - p1[1])) + 1
+        num_samples = max(num_samples, 2)
 
-    for cell_id, (min_y, max_y, min_x, max_x) in bounding_boxes.items():
-        # Add cell to all grid cells it overlaps
-        grid_min_y, grid_max_y = min_y // grid_size, max_y // grid_size
-        grid_min_x, grid_max_x = min_x // grid_size, max_x // grid_size
+    xs = np.linspace(p1[0], p2[0], num_samples)
+    ys = np.linspace(p1[1], p2[1], num_samples)
 
-        for gy in range(grid_min_y, grid_max_y + 1):
-            for gx in range(grid_min_x, grid_max_x + 1):
-                grid[(gy, gx)].append(cell_id)
+    xs_int = np.clip(np.round(xs).astype(int), 0, mask.shape[1] - 1)
+    ys_int = np.clip(np.round(ys).astype(int), 0, mask.shape[0] - 1)
 
-    print(f"  ✓ Built grid with {len(grid)} occupied cells")
+    sampled_values = mask[ys_int, xs_int]
+    blocking_ids = set(np.unique(sampled_values)) - {0, cell_id, neighbor_id}
 
-    # Find candidates using grid, then verify
-    print("  Finding neighbor candidates...")
-    cell_neighbors = defaultdict(int)
-    neighbor_offsets = [
-        (-1, -1),
-        (-1, 0),
-        (-1, 1),
-        (0, -1),
-        (0, 1),
-        (1, -1),
-        (1, 0),
-        (1, 1),
-    ]
+    return len(blocking_ids) > 0
 
-    checked_pairs = set()
+
+def find_cell_neighbors(mask, valid_cells):
+    """
+    Returns dict mapping each cell_id to a list of neighboring cell_ids, neighbors are defined as cells who's bounding elipses intersect
+    """
     candidates_tested = 0
     neighbors_found = 0
+    blocked_pairs = 0
 
-    for cell1 in boundary_sets.keys():
-        min_y1, max_y1, min_x1, max_x1 = bounding_boxes[cell1]
+    ellipses = {}
+    polygons = {}
 
-        # Find candidate neighbors from nearby grid cells
-        candidates = set()
-        grid_min_y, grid_max_y = min_y1 // grid_size - 1, max_y1 // grid_size + 1
-        grid_min_x, grid_max_x = min_x1 // grid_size - 1, max_x1 // grid_size + 1
+    for cell_id in valid_cells:
+        ellipse, params = make_cell_elipse(mask, cell_id)
+        mx, my, a, b, angle = params
+        ellipses[cell_id] = ellipse
+        polygons[cell_id] = make_cell_polygon(mask, cell_id)
 
-        for gy in range(grid_min_y, grid_max_y + 1):
-            for gx in range(grid_min_x, grid_max_x + 1):
-                candidates.update(grid.get((gy, gx), []))
+    neighbors = {cell_id: 0 for cell_id in valid_cells}
+    # R tree uses bounding boxes to determine if which cells are "worth" comparing against
+    # decreases number of cells tested by ruling out cells as who's ellipses cannot intersect (since R tree sorts shapes spatially)
+    shapes = list(ellipses.values())
+    ids = list(ellipses.keys())
+    tree = STRtree(shapes)
 
-        # Remove self
-        candidates.discard(cell1)
-
-        # Quick bounding box check for candidates
-        for cell2 in candidates:
-            if (cell1, cell2) in checked_pairs or (cell2, cell1) in checked_pairs:
-                continue
-
-            checked_pairs.add((cell1, cell2))
-
-            # Bounding box proximity check (must be within 1 pixel)
-            min_y2, max_y2, min_x2, max_x2 = bounding_boxes[cell2]
-
-            if (
-                min_y1 > max_y2 + 1
-                or max_y1 < min_y2 - 1
-                or min_x1 > max_x2 + 1
-                or max_x1 < min_x2 - 1
-            ):
-                continue  # Bounding boxes too far apart
-
-            # Verify actual boundary adjacency
+    for cell_id, ellipse in ellipses.items():
+        candidate_indices = tree.query(ellipse, predicate="intersects")
+        for idx in candidate_indices:
             candidates_tested += 1
-            boundary1 = boundary_sets[cell1]
-            boundary2 = boundary_sets[cell2]
-
-            are_neighbors = False
-            for y1, x1 in boundary1:
-                if are_neighbors:
-                    break
-                for dy, dx in neighbor_offsets:
-                    if (y1 + dy, x1 + dx) in boundary2:
-                        are_neighbors = True
-                        neighbors_found += 1
-                        break
-
-            if are_neighbors:
-                cell_neighbors[cell1] += 1
-                cell_neighbors[cell2] += 1
-
-            if candidates_tested % 10000 == 0:
-                print(
-                    f"    Tested {candidates_tested} candidates, found {neighbors_found} neighbors..."
-                )
+            neighbor_id = ids[idx]  # convert shapely id to cell_id
+            if neighbor_id == cell_id:
+                continue
+            p1_geom, p2_geom = nearest_points(polygons[cell_id], polygons[neighbor_id])
+            p1 = (p1_geom.x, p1_geom.y)
+            p2 = (p2_geom.x, p2_geom.y)
+            if check_intersection(mask, p1, p2, cell_id, neighbor_id):
+                blocked_pairs += 1
+                continue
+            neighbors[cell_id] += 1
+            neighbors_found += 1
 
     print(f"  ✓ Tested {candidates_tested} candidate pairs")
     print(f"  ✓ Found {neighbors_found} neighbor relationships")
-    if len(boundary_sets) > 0:
-        total_possible = len(boundary_sets) * (len(boundary_sets) - 1) // 2
-        print(
-            f"  ✓ Speedup: Tested only {candidates_tested} instead of {total_possible} pairs"
-        )
-
-    return dict(cell_neighbors)
+    print(f"  ✓ Rejected {blocked_pairs} pairs due to blockage by a third cell")
+    return neighbors
 
 
 def calculate_cell_vertices(valid_cells, vertices):

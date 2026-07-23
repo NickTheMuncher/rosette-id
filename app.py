@@ -27,13 +27,14 @@ from src.rosette_detection import (
     create_base_visualization,
     prepare_interactive_data,
     generate_html_visualization,
-    calculate_cell_neighbors,
+    find_cell_neighbors,
 )
 from src.csv_export import (
     extract_detailed_cell_properties,
     count_junction_participation,
     build_csv_rows,
     export_rows_to_csv,
+    export_vertice_counts,
 )
 
 # ============================================================================
@@ -408,7 +409,9 @@ def get_user_input():
     }
 
 
-def process_single_image(image_path, output_html, output_csv, params):
+def process_single_image(
+    image_path, output_html, output_csv, params, batch_ct: int = 0
+):
     """
     Process a single image and generate HTML visualization and CSV data.
 
@@ -473,8 +476,7 @@ def process_single_image(image_path, output_html, output_csv, params):
 
     # Calculate cell neighbors once (used for both visualization and CSV export)
     print("Calculating cell neighbors...")
-    cell_neighbors = calculate_cell_neighbors(valid_cells, cell_boundaries)
-
+    cell_neighbors = find_cell_neighbors(mask, valid_cells)
     # Generate base visualization image
     base_img_base64 = create_base_visualization(
         img, valid_cells, cell_properties, rosettes
@@ -496,6 +498,12 @@ def process_single_image(image_path, output_html, output_csv, params):
     junction_counts = count_junction_participation(all_vertices, valid_cells)
     csv_columns, csv_rows = build_csv_rows(
         detailed_properties, junction_counts, cell_neighbors
+    )
+    export_vertice_counts(
+        all_vertices,
+        image_name=str(Path(output_csv).stem),
+        export_path=str(Path(output_csv).with_name("vertex_counts.csv")),
+        batch_ct=batch_ct,
     )
     export_rows_to_csv(csv_columns, csv_rows, output_csv)
     print(f"✓ Created CSV: {output_csv}")
@@ -598,7 +606,7 @@ def main():
 
             try:
                 result = process_single_image(
-                    image_path, output_html, output_csv, config
+                    image_path, output_html, output_csv, config, batch_ct=idx
                 )
                 results.append(result)
 
@@ -640,7 +648,6 @@ def main():
             result = process_single_image(
                 config["input_path"], config["output_path"], csv_output_path, config
             )
-
             if result["success"]:
                 print("\n" + "=" * 70)
                 print("ROSETTE DETECTION RESULTS")

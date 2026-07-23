@@ -11,6 +11,8 @@ to CSV format. For each cell, it extracts:
 import csv
 import numpy as np
 from skimage import measure
+import pandas as pd
+from pathlib import Path
 
 
 def get_csv_columns():
@@ -314,3 +316,53 @@ def generate_csv_export(mask, valid_cells, vertices, cell_neighbors, output_path
     print("\n" + "=" * 70)
     print("CSV EXPORT COMPLETE")
     print("=" * 70)
+
+
+def export_vertice_counts(
+    junctions_counts,
+    export_path,
+    image_name,
+    batch_ct: int = 0,
+):
+    """
+    Generate and export a csv containing total cell junction counts
+
+    Args:
+    junction_counts: Dictionary of junction participation counts
+    export_path: Path to write csv
+    batch_ct: Batch count for the current export, used to track multiple exports in the same file
+    """
+    junctions_counts = sorted(junctions_counts, key=lambda x: x["num_cells"])
+    if Path(export_path).exists():
+        export_df = pd.read_csv(export_path)
+        export_dict = export_df.to_dict(orient="list")
+        export_dict["Image Name"].append(image_name)
+    else:
+        export_dict = {
+            "Image Name": [image_name],
+            "3-Vertex": [0],
+            "4-Vertex": [0],
+            "5-Vertex": [0],
+            "6-Vertex": [0],
+        }
+
+    row_idx = len(export_dict["Image Name"]) - 1  # <-- actual row this image belongs to
+
+    for junction in junctions_counts:
+        junc_size = f"{junction['num_cells']}-Vertex"
+        if junc_size in export_dict:
+            if len(export_dict[junc_size]) <= row_idx:
+                export_dict[junc_size] += [0] * (
+                    row_idx + 1 - len(export_dict[junc_size])
+                )
+            export_dict[junc_size][row_idx] += 1
+        else:
+            export_dict[junc_size] = [0] * (row_idx + 1)
+            export_dict[junc_size][row_idx] += 1
+
+    for key in export_dict:
+        if len(export_dict[key]) < row_idx + 1:
+            export_dict[key] += [0] * (row_idx + 1 - len(export_dict[key]))
+
+    export_df = pd.DataFrame(export_dict)
+    export_df.to_csv(export_path, index=False)
