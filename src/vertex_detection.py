@@ -90,7 +90,7 @@ def find_vertices(
     vertex_locations = np.array([v["location"] for v in vertices])
 
     # Merge nearby vertices
-    merge_distance = vertex_radius * 1.0
+    merge_distance = vertex_radius * 0.5
     merged_vertices = []
     used = set()
 

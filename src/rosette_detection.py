@@ -69,7 +69,7 @@ def cluster_vertices(vertices, vertex_radius, min_cells_for_rosette=5):
     vertex_locations = np.array([v["location"] for v in rosette_vertices])
 
     # Use distance-based clustering to merge nearby vertices
-    merge_distance = vertex_radius * 1.5
+    merge_distance = vertex_radius * 0.5
     merged_vertices = []
     used = set()
 
@@ -417,7 +417,7 @@ def prepare_interactive_data(
 
     # Prepare rosette data
     rosette_data = []
-    for idx, rosette in enumerate(rosettes):
+    for idx, rosette in enumerate(vertices):
         rosette_data.append(
             {
                 "id": idx,
@@ -613,6 +613,14 @@ def generate_html_visualization(
                     <div class="stat-label">Cells in Rosettes</div>
                 </div>
             </div>
+            <div id="legend" style="display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:12px;">
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#4CAF50;display:inline-block;"></span>3-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FFD54F;display:inline-block;"></span>4-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FF9800;display:inline-block;"></span>5-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FF5722;display:inline-block;"></span>6-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#E91E63;display:inline-block;"></span>7-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#9C27B0;display:inline-block;"></span>8+ cell</span>
+            </div>
             <div id="actions">
                 <button class="btn secondary" id="download-image-btn" type="button">Download edited image (PNG)</button>
                 <button class="btn" id="download-csv-btn" type="button">Download updated CSV</button>
@@ -634,6 +642,15 @@ def generate_html_visualization(
     </div>
 
     <script>
+        function getJunctionColor(size) {{
+            // Color scale by number of participating cells (junction order)
+            if (size <= 3) return '#4CAF50';   // green  - normal 3-way junction
+            if (size === 4) return '#FFD54F';  // yellow - 4-way
+            if (size === 5) return '#FF9800';  // orange - 5-way
+            if (size === 6) return '#FF5722';  // deep orange - 6-way
+            if (size === 7) return '#E91E63';  // pink/red - 7-way
+            return '#9C27B0';                  // purple - 8+ way (higher-order rosette)
+        }}
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         
@@ -698,14 +715,14 @@ def generate_html_visualization(
                 }});
             }}
             
-            // Draw red dots for active rosettes (not removed)
+            // Draw dots for active junctions (not removed), colored by participant count
             rosettes.forEach((rosette, rosetteIdx) => {{
                 if (removedRosettes.has(rosetteIdx)) return;
                 
                 const [cx, cy] = rosette.center;
                 const radius = 6;
                 
-                ctx.fillStyle = 'rgba(255, 0, 0, 1)';
+                ctx.fillStyle = getJunctionColor(rosette.num_cells);
                 ctx.beginPath();
                 ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
                 ctx.fill();
@@ -735,7 +752,7 @@ def generate_html_visualization(
                     // Draw emphasized center marker for hovered rosette
                     const [cx, cy] = rosette.center;
                     
-                    ctx.fillStyle = 'rgba(255, 0, 0, 1)';
+                    ctx.fillStyle = getJunctionColor(rosette.num_cells);
                     ctx.beginPath();
                     ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
                     ctx.fill();
