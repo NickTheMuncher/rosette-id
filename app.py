@@ -5,7 +5,7 @@ This is the main application file that orchestrates the complete rosette detecti
 workflow by importing and coordinating the modular components:
 - cell_segmentation: Loads images and detects individual cells
 - vertex_detection: Finds points where multiple cells meet
-- rosette_detection: Clusters vertices and creates visualizations
+- creates visualizations
 - csv_export: Exports detailed cell properties and junction counts to CSV
 
 Supports both single-image and batch processing modes.
@@ -21,9 +21,8 @@ from src.cell_segmentation import (
     detect_cells,
     extract_cell_boundaries,
 )
-from src.vertex_detection import find_vertices
+from src.vertex_detection import find_vertices_topological
 from src.rosette_detection import (
-    cluster_vertices,
     create_base_visualization,
     prepare_interactive_data,
     generate_html_visualization,
@@ -448,27 +447,19 @@ def process_single_image(
     cell_boundaries = extract_cell_boundaries(valid_cells, cell_properties)
 
     # Find ALL vertices where cells meet (3+ cells) for comprehensive junction analysis
-    all_vertices = find_vertices(
-        valid_cells,
-        cell_boundaries,
-        mask,
-        params["vertex_radius"],
+    all_vertices = find_vertices_topological(
+        valid_cells=valid_cells,
+        mask=mask,
+        vertex_radius=params["vertex_radius"],
         min_cells_for_vertex=3,
     )
 
     # Find rosette vertices (5+ cells) for visualization
-    rosette_vertices = find_vertices(
-        valid_cells,
-        cell_boundaries,
-        mask,
-        params["vertex_radius"],
-        params["min_rosette_cells"],
-    )
-
-    # Cluster nearby vertices into rosettes
-    rosettes = cluster_vertices(
-        rosette_vertices, params["vertex_radius"], params["min_rosette_cells"]
-    )
+    rosettes = [
+        vertex
+        for vertex in all_vertices
+        if vertex["num_cells"] >= params["min_rosette_cells"]
+    ]
 
     num_rosettes = len(rosettes)
 
@@ -484,13 +475,15 @@ def process_single_image(
 
     # Prepare data for JavaScript
     print("Creating interactive data...")
-    cell_pixels, cell_data, rosette_data, cell_to_rosettes = prepare_interactive_data(
-        valid_cells,
-        cell_properties,
-        cell_boundaries,
-        all_vertices,
-        rosettes,
-        cell_neighbors,
+    cell_pixels, cell_data, vertex_data, rosette_data, cell_to_rosettes = (
+        prepare_interactive_data(
+            valid_cells,
+            cell_properties,
+            cell_boundaries,
+            all_vertices,
+            rosettes,
+            cell_neighbors,
+        )
     )
 
     # Build CSV rows using ALL vertices (3+) for complete junction data
@@ -513,6 +506,7 @@ def process_single_image(
         base_img_base64,
         cell_pixels,
         cell_data,
+        vertex_data,
         rosette_data,
         cell_to_rosettes,
         len(valid_cells),

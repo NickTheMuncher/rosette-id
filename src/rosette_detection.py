@@ -39,73 +39,6 @@ def filter_rosette_vertices(vertices, min_cells_for_rosette=5):
     return rosette_vertices
 
 
-def cluster_vertices(vertices, vertex_radius, min_cells_for_rosette=5):
-    """
-    Filter for rosette vertices and merge nearby ones that likely represent the same rosette.
-
-    First filters vertices to only those with min_cells_for_rosette or more cells.
-    Then, vertices within 1.5 * vertex_radius of each other are merged by averaging
-    their locations and combining their cell lists.
-
-    Args:
-        vertices: List of ALL vertex dictionaries (including small junctions)
-        vertex_radius: Radius used for vertex detection (pixels)
-        min_cells_for_rosette: Minimum cells required for a rosette (default: 5)
-
-    Returns:
-        List of merged rosette dictionaries
-    """
-    print("\n" + "=" * 70)
-    print("STEP 4: FILTERING AND CLUSTERING ROSETTE VERTICES")
-    print("=" * 70)
-
-    # First, filter for rosette vertices only (5+ cells)
-    rosette_vertices = filter_rosette_vertices(vertices, min_cells_for_rosette)
-
-    if len(rosette_vertices) == 0:
-        print("No rosettes found (no vertices with 5+ cells)")
-        return []
-
-    vertex_locations = np.array([v["location"] for v in rosette_vertices])
-
-    # Use distance-based clustering to merge nearby vertices
-    merge_distance = vertex_radius * 1.5
-    merged_vertices = []
-    used = set()
-
-    for i, vertex in enumerate(rosette_vertices):
-        if i in used:
-            continue
-
-        # Find all vertices within merge_distance
-        loc = vertex_locations[i]
-        distances = np.sqrt(np.sum((vertex_locations - loc) ** 2, axis=1))
-        nearby_indices = np.where(distances <= merge_distance)[0]
-
-        # Merge all nearby vertices
-        merged_cells = set()
-        merged_locations = []
-        for idx in nearby_indices:
-            merged_cells.update(rosette_vertices[idx]["cells"])
-            merged_locations.append(vertex_locations[idx])
-            used.add(idx)
-
-        # Calculate average location
-        avg_location = np.mean(merged_locations, axis=0)
-
-        merged_vertices.append(
-            {
-                "location": tuple(avg_location.astype(int)),
-                "cells": list(merged_cells),
-                "num_cells": len(merged_cells),
-            }
-        )
-
-    print(f"Identified {len(merged_vertices)} rosettes after merging nearby vertices")
-
-    return merged_vertices
-
-
 def make_cell_polygon(mask, cell_id):
     """
     Build the true polygon outline of a cell from its mask footprint. Used to find the closest points
@@ -416,6 +349,23 @@ def prepare_interactive_data(
     print(f"✓ Cell processing complete in {elapsed:.1f}s")
 
     # Prepare rosette data
+    rosette_center_to_idx = {
+        (int(r["location"][0]), int(r["location"][1])): r_idx
+        for r_idx, r in enumerate(rosettes)
+    }
+    vertex_data = []
+    for v_idx, vertex in enumerate(vertices):
+        center = (int(vertex["location"][0]), int(vertex["location"][1]))
+        vertex_data.append(
+            {
+                "id": v_idx,
+                "cells": [int(c) for c in vertex["cells"]],
+                "center": [center[0], center[1]],
+                "num_cells": vertex.get("num_cells", len(vertex["cells"])),
+                "rosette_idx": rosette_center_to_idx.get(center),
+            }
+        )
+
     rosette_data = []
     for idx, rosette in enumerate(rosettes):
         rosette_data.append(
@@ -439,13 +389,14 @@ def prepare_interactive_data(
             )
     print("=" * 70)
 
-    return cell_pixels, cell_data, rosette_data, cell_to_rosettes
+    return cell_pixels, cell_data, vertex_data, rosette_data, cell_to_rosettes
 
 
 def generate_html_visualization(
     base_img_base64,
     cell_pixels,
     cell_data,
+    vertex_data,
     rosette_data,
     cell_to_rosettes,
     num_cells,
@@ -613,6 +564,14 @@ def generate_html_visualization(
                     <div class="stat-label">Cells in Rosettes</div>
                 </div>
             </div>
+            <div id="legend" style="display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:12px;">
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#4CAF50;display:inline-block;"></span>3-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FFD54F;display:inline-block;"></span>4-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FF9800;display:inline-block;"></span>5-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#FF5722;display:inline-block;"></span>6-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#E91E63;display:inline-block;"></span>7-cell</span>
+                <span style="display:flex;align-items:center;gap:5px;"><span style="width:12px;height:12px;border-radius:50%;background:#9C27B0;display:inline-block;"></span>8+ cell</span>
+            </div>
             <div id="actions">
                 <button class="btn secondary" id="download-image-btn" type="button">Download edited image (PNG)</button>
                 <button class="btn" id="download-csv-btn" type="button">Download updated CSV</button>
@@ -634,12 +593,22 @@ def generate_html_visualization(
     </div>
 
     <script>
+        function getJunctionColor(size) {{
+            // Color scale by number of participating cells (junction order)
+            if (size <= 3) return '#4CAF50';   // green  - normal 3-way junction
+            if (size === 4) return '#FFD54F';  // yellow - 4-way
+            if (size === 5) return '#FF9800';  // orange - 5-way
+            if (size === 6) return '#FF5722';  // deep orange - 6-way
+            if (size === 7) return '#E91E63';  // pink/red - 7-way
+            return '#9C27B0';                  // purple - 8+ way (higher-order rosette)
+        }}
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         
         // Data from Python
         const cellPixels = {json.dumps(cell_pixels)};
         const cellData = {json.dumps(cell_data)};
+        const vertexData = {json.dumps(vertex_data)};
         const rosettes = {json.dumps(rosette_data)};
         const cellToRosettes = {json.dumps({int(k): v for k, v in cell_to_rosettes.items()})};
         const csvColumns = {json.dumps(csv_columns)};
@@ -697,19 +666,16 @@ def generate_html_visualization(
                     }});
                 }});
             }}
-            
-            // Draw red dots for active rosettes (not removed)
-            rosettes.forEach((rosette, rosetteIdx) => {{
-                if (removedRosettes.has(rosetteIdx)) return;
-                
-                const [cx, cy] = rosette.center;
-                const radius = 6;
-                
-                ctx.fillStyle = 'rgba(255, 0, 0, 1)';
+            // Draw dots for active junctions, colored by participant count
+            vertexData.forEach((vertex) => {{
+                const rIdx = vertex.rosette_idx;
+                if (rIdx !== null && removedRosettes.has(rIdx)) return;  // hide removed rosettes only
+
+                const [cx, cy] = vertex.center;
+                ctx.fillStyle = getJunctionColor(vertex.num_cells);
                 ctx.beginPath();
-                ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+                ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
                 ctx.fill();
-                
                 ctx.strokeStyle = 'white';
                 ctx.lineWidth = 1;
                 ctx.stroke();
@@ -735,7 +701,7 @@ def generate_html_visualization(
                     // Draw emphasized center marker for hovered rosette
                     const [cx, cy] = rosette.center;
                     
-                    ctx.fillStyle = 'rgba(255, 0, 0, 1)';
+                    ctx.fillStyle = getJunctionColor(rosette.num_cells);
                     ctx.beginPath();
                     ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
                     ctx.fill();
@@ -984,25 +950,22 @@ def generate_html_visualization(
                 }}
             }}
             
-            // If not clicking on removed rosette, check if clicking on active red dot to remove it
-            for (let i = 0; i < rosettes.length; i++) {{
-                if (removedRosettes.has(i)) continue;
-                
-                const [cx, cy] = rosettes[i].center;
+              // If not clicking on a removed rosette, check if clicking on an active dot to remove it
+            for (const vertex of vertexData) {{
+                const rIdx = vertex.rosette_idx;
+                if (rIdx === null || removedRosettes.has(rIdx)) continue;
+
+                const [cx, cy] = vertex.center;
                 const distance = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
-                
-                // If clicked within the red dot (radius 6, but give some leeway)
+
                 if (distance <= 10) {{
-                    removedRosettes.add(i);
-                    currentHighlightedRosettes.delete(i);
+                    removedRosettes.add(rIdx);
+                    currentHighlightedRosettes.delete(rIdx);
                     drawImage();
-                    
-                    // Update rosette count
                     const numRemaining = rosettes.length - removedRosettes.size;
                     document.getElementById('rosette-count').textContent = numRemaining;
-                    
                     document.getElementById('hover-info').innerHTML = 
-                        `<strong>Rosette #${{i + 1}} removed!</strong> ${{numRemaining}} rosette(s) remaining. (Click on grayed area to restore)`;
+                        `<strong>Rosette #${{rIdx + 1}} removed!</strong> ${{numRemaining}} rosette(s) remaining. (Click on grayed area to restore)`;
                     return;
                 }}
             }}
